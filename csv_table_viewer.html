@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSV Tablo Görüntüleyici</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f172a;
+      --panel: #17233b;
+      --panel-light: #20304f;
+      --text: #e5edf9;
+      --muted: #9aabc5;
+      --accent: #38bdf8;
+      --border: #304363;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0f172a, #172554);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { width: min(1800px, 100%); margin: auto; padding: 28px; }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    p { color: var(--muted); margin: 0; }
+    .toolbar, .drop-zone {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 22px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(23, 35, 59, .9);
+    }
+    .drop-zone { justify-content: center; min-height: 100px; border-style: dashed; text-align: center; }
+    .drop-zone.dragging { border-color: var(--accent); background: rgba(14, 116, 144, .22); }
+    button, input {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-light);
+      color: var(--text);
+      padding: 9px 12px;
+      font: inherit;
+    }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    input[type="search"] { min-width: min(360px, 100%); flex: 1; }
+    input[type="file"] { max-width: 100%; }
+    .stats { margin-left: auto; color: var(--muted); }
+    .table-wrap {
+      overflow: auto;
+      max-height: calc(100vh - 300px);
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #253858;
+      color: #d9f3ff;
+      cursor: pointer;
+      user-select: none;
+    }
+    th:hover { background: #315073; }
+    tbody tr:nth-child(even) { background: rgba(255,255,255,.025); }
+    tbody tr:hover { background: rgba(56, 189, 248, .1); }
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; }
+    .empty { padding: 36px; color: var(--muted); text-align: center; }
+    @media (max-width: 700px) { main { padding: 16px; } .stats { margin-left: 0; width: 100%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>CSV Tablo Görüntüleyici</h1>
+    <p>Bir CSV dosyası seçin veya aşağıdaki alana sürükleyin.</p>
+
+    <section class="drop-zone" id="dropZone">
+      <input id="fileInput" type="file" accept=".csv,text/csv">
+      <span>veya CSV dosyasını buraya bırakın</span>
+    </section>
+
+    <section class="toolbar">
+      <input id="searchInput" type="search" placeholder="Tabloda ara..." disabled>
+      <label>
+        Sayfa başına:
+        <select id="pageSize" disabled>
+          <option>25</option>
+          <option selected>50</option>
+          <option>100</option>
+          <option>250</option>
+        </select>
+      </label>
+      <span id="stats" class="stats">Henüz dosya seçilmedi</span>
+    </section>
+
+    <div class="table-wrap">
+      <table id="dataTable" hidden>
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+      <div id="empty" class="empty">CSV dosyanız burada tablo olarak gösterilecek.</div>
+    </div>
+    <div id="pagination" class="pagination" hidden>
+      <button id="previous">Önceki</button>
+      <span id="pageInfo"></span>
+      <button id="next">Sonraki</button>
+    </div>
+  </main>
+
+  <script>
+    const state = { headers: [], rows: [], filteredRows: [], page: 1, sortColumn: -1, sortDirection: 1 };
+    const fileInput = document.querySelector("#fileInput");
+    const dropZone = document.querySelector("#dropZone");
+    const searchInput = document.querySelector("#searchInput");
+    const pageSize = document.querySelector("#pageSize");
+    const stats = document.querySelector("#stats");
+    const table = document.querySelector("#dataTable");
+    const empty = document.querySelector("#empty");
+    const pagination = document.querySelector("#pagination");
+
+    function parseCsv(text) {
+      const rows = [];
+      let row = [], value = "", quoted = false;
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i], next = text[i + 1];
+        if (char === '"' && quoted && next === '"') { value += '"'; i++; }
+        else if (char === '"') quoted = !quoted;
+        else if (char === "," && !quoted) { row.push(value); value = ""; }
+        else if ((char === "\n" || char === "\r") && !quoted) {
+          if (char === "\r" && next === "\n") i++;
+          row.push(value); value = "";
+          if (row.some(cell => cell.trim() !== "")) rows.push(row);
+          row = [];
+        } else value += char;
+      }
+      if (value || row.length) { row.push(value); rows.push(row); }
+      return rows;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[char]));
+    }
+
+    function render() {
+      const size = Number(pageSize.value);
+      const start = (state.page - 1) * size;
+      const visibleRows = state.filteredRows.slice(start, start + size);
+      table.querySelector("thead").innerHTML = `<tr>${state.headers.map((header, index) => {
+        const marker = state.sortColumn === index ? (state.sortDirection === 1 ? " ▲" : " ▼") : "";
+        return `<th data-column="${index}" title="Sıralamak için tıklayın">${escapeHtml(header)}${marker}</th>`;
+      }).join("")}</tr>`;
+      table.querySelector("tbody").innerHTML = visibleRows.map(row =>
+        `<tr>${state.headers.map((_, index) => `<td>${escapeHtml(row[index] ?? "")}</td>`).join("")}</tr>`
+      ).join("");
+      table.hidden = state.filteredRows.length === 0;
+      empty.hidden = state.filteredRows.length !== 0;
+      pagination.hidden = state.filteredRows.length === 0;
+      const totalPages = Math.max(1, Math.ceil(state.filteredRows.length / size));
+      document.querySelector("#pageInfo").textContent = `${state.page} / ${totalPages}`;
+      document.querySelector("#previous").disabled = state.page === 1;
+      document.querySelector("#next").disabled = state.page === totalPages;
+      stats.textContent = `${state.filteredRows.length.toLocaleString("tr-TR")} / ${state.rows.length.toLocaleString("tr-TR")} satır`;
+    }
+
+    function loadFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const parsed = parseCsv(String(reader.result).replace(/^\uFEFF/, ""));
+        state.headers = parsed.shift() || [];
+        state.rows = parsed.map(row => state.headers.map((_, index) => row[index] ?? ""));
+        state.page = 1;
+        state.sortColumn = -1;
+        searchInput.disabled = pageSize.disabled = false;
+        searchInput.value = "";
+        empty.textContent = state.rows.length ? "" : "CSV dosyasında veri bulunamadı.";
+        state.filteredRows = [...state.rows];
+        render();
+      };
+      reader.onerror = () => { empty.hidden = false; empty.textContent = "Dosya okunamadı."; };
+      reader.readAsText(file, "UTF-8");
+    }
+
+    fileInput.addEventListener("change", () => loadFile(fileInput.files[0]));
+    ["dragenter", "dragover"].forEach(type => dropZone.addEventListener(type, event => {
+      event.preventDefault(); dropZone.classList.add("dragging");
+    }));
+    ["dragleave", "drop"].forEach(type => dropZone.addEventListener(type, event => {
+      event.preventDefault(); dropZone.classList.remove("dragging");
+    }));
+    dropZone.addEventListener("drop", event => loadFile(event.dataTransfer.files[0]));
+    searchInput.addEventListener("input", () => {
+      const query = searchInput.value.trim().toLocaleLowerCase("tr-TR");
+      state.filteredRows = state.rows.filter(row => row.some(cell =>
+        cell.toLocaleLowerCase("tr-TR").includes(query)
+      ));
+      state.page = 1;
+      render();
+    });
+    pageSize.addEventListener("change", () => { state.page = 1; render(); });
+    document.querySelector("#previous").addEventListener("click", () => { state.page--; render(); });
+    document.querySelector("#next").addEventListener("click", () => { state.page++; render(); });
+    table.querySelector("thead").addEventListener("click", event => {
+      const header = event.target.closest("th");
+      if (!header) return;
+      const column = Number(header.dataset.column);
+      state.sortDirection = state.sortColumn === column ? -state.sortDirection : 1;
+      state.sortColumn = column;
+      state.filteredRows.sort((a, b) => String(a[column]).localeCompare(String(b[column]), "tr", { numeric: true }) * state.sortDirection);
+      state.page = 1;
+      render();
+    });
+  </script>
+</body>
+</html>
