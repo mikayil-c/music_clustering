@@ -34,8 +34,9 @@ st.set_page_config(
 )
 
 st.title("🎵 Music Cluster Lab")
+algorithm_options = {"kmeans": "K-Means", "kmedoids": "K-Medoids"}
 st.markdown(
-    "Şarkıları sayısal müzikal özelliklerine göre K-Means ile kümeleyen ve "
+    "Şarkıları sayısal müzikal özelliklerine göre K-Means veya K-Medoids ile kümeleyen ve "
     "benzer parçaları keşfetmeye yardımcı olan denetimsiz öğrenme uygulaması."
 )
 
@@ -119,10 +120,17 @@ st.info(
 )
 
 st.sidebar.header("2. Ölçeklendirme ve kümeleme")
+algorithm = st.sidebar.selectbox(
+    "Kümeleme algoritması",
+    options=list(algorithm_options),
+    format_func=algorithm_options.get,
+    help="K-Medoids, merkez olarak veri setindeki gerçek şarkıları seçer ve aykırı değerlere K-Means'e göre daha dayanıklıdır.",
+)
+algorithm_label = algorithm_options[algorithm]
 
 n_clusters_max = min(10, sample_size)
 n_clusters = st.sidebar.slider(
-    "K-Means küme sayısı (k)",
+    f"{algorithm_label} küme sayısı (k)",
     min_value=1,
     max_value=max(1, n_clusters_max),
     value=min(4, max(1, n_clusters_max)),
@@ -139,13 +147,13 @@ reference_labels = (
     sample[genre_col].astype("string").to_numpy() if genre_col is not None else None
 )
 
-with st.spinner("K-Means modeli eğitiliyor..."):
-    labels, elapsed, _ = fit_labels(X_scaled, int(n_clusters))
+with st.spinner(f"{algorithm_label} modeli eğitiliyor..."):
+    labels, elapsed, _ = fit_labels(X_scaled, int(n_clusters), algorithm)
 metrics = calculate_metrics(X_scaled, labels)
 external_metrics = calculate_external_metrics(labels, reference_labels)
 cluster_names = make_cluster_names(X_scaled, model_features, labels)
 k_evaluation_df = evaluate_k_range(
-    X_scaled, range(1, n_clusters_max + 1), reference_labels
+    X_scaled, range(1, n_clusters_max + 1), reference_labels, algorithm
 )
 
 # Build the enriched result frame.
@@ -192,7 +200,7 @@ tab_overview, tab_dataset, tab_map, tab_profiles, tab_discovery = st.tabs(
 )
 
 with tab_overview:
-    st.subheader("K-Means sonuç özeti")
+    st.subheader(f"{algorithm_label} sonuç özeti")
     left, right = st.columns([1.2, 1])
     with left:
         st.markdown("**Kümelerin büyüklükleri**")
@@ -217,7 +225,7 @@ with tab_overview:
     with right:
         st.markdown("**Bu sonuç nasıl okunmalı?**")
         st.write(
-            "K-Means, her şarkıyı seçilen k değeri doğrultusunda bir kümeye atar. "
+            f"{algorithm_label}, her şarkıyı seçilen k değeri doğrultusunda bir kümeye atar. "
             "Küme profillerini ve gerçek şarkı örneklerini metriklerle birlikte değerlendir."
         )
         st.markdown("**Seçilen modelin metrikleri**")
@@ -300,13 +308,13 @@ with tab_dataset:
         st.plotly_chart(genre_fig, use_container_width=True)
         st.dataframe(genre_counts, use_container_width=True, hide_index=True)
 
-    st.markdown("**K değerlerine göre K-Means değerlendirmesi**")
+    st.markdown(f"**K değerlerine göre {algorithm_label} değerlendirmesi**")
     st.write(
         "Aşağıdaki grafikler, StandardScaler uygulanmış müzikal özelliklerle "
-        "k=1 ile k arasındaki K-Means sonuçlarını karşılaştırır."
+        f"k=1 ile k arasındaki {algorithm_label} sonuçlarını karşılaştırır."
     )
     chart_data = [
-        ("WCSS (Inertia)", "Elbow yöntemi — WCSS", "WCSS / Inertia"),
+        ("Objective", "Kümeleme amacı", "Toplam uzaklık"),
         ("Silhouette Score", "Silhouette Score", "Silhouette Score"),
         ("Davies–Bouldin Index", "Davies–Bouldin Index", "Davies–Bouldin Index"),
         ("Calinski–Harabasz Score", "Calinski–Harabasz Score", "Calinski–Harabasz Score"),
@@ -339,7 +347,7 @@ with tab_dataset:
     st.dataframe(
         k_evaluation_df.style.format(
             {
-                "WCSS (Inertia)": "{:.1f}",
+                "Objective": "{:.1f}",
                 "Silhouette Score": "{:.3f}",
                 "Davies–Bouldin Index": "{:.3f}",
                 "Calinski–Harabasz Score": "{:.1f}",
@@ -366,7 +374,7 @@ with tab_map:
         color="cluster_name",
         hover_data=hover_cols,
         opacity=0.78,
-        title="K-Means sonuçları — PCA izdüşümü",
+        title=f"{algorithm_label} sonuçları — PCA izdüşümü",
         labels={"PCA 1": "PCA bileşeni 1", "PCA 2": "PCA bileşeni 2"},
     )
     fig.update_traces(marker={"size": 7})
@@ -493,11 +501,14 @@ with tab_discovery:
 export_df = result_df.drop(columns=["_display_name"], errors="ignore").copy()
 st.divider()
 st.subheader("Sonuçları dışa aktar")
-st.write("K-Means küme etiketlerini, küme profilini ve PCA koordinatlarını CSV olarak indirebilirsin.")
+st.write(
+    f"{algorithm_label} küme etiketlerini, küme profilini ve PCA koordinatlarını "
+    "CSV olarak indirebilirsin."
+)
 st.download_button(
     "Kümelenmiş şarkıları CSV indir",
     data=export_df.to_csv(index=False).encode("utf-8-sig"),
-    file_name="clustered_songs_kmeans.csv",
+    file_name=f"clustered_songs_{algorithm}.csv",
     mime="text/csv",
 )
 
@@ -509,5 +520,5 @@ with st.expander("Metodolojik notlar"):
         "- İçsel metrikler müzikal kaliteyi kesin olarak ölçmez. Kümeler, profil tabloları ve şarkı örnekleriyle birlikte yorumlanmalıdır.\n"
         "- Tür sütunu varsa ARI, NMI, homogeneity, completeness ve V-measure, tür etiketlerini modele vermeden dış doğrulama olarak hesaplanır.\n"
         "- Küme profil adları, sabit eşikler yerine her kümenin veri genelinden standardize edilmiş en ayırt edici iki özelliğine göre oluşturulur.\n"
-        "- K-Means sonuçları seçilen k değerine ve StandardScaler sonrası özellik uzayındaki uzaklıklara göre oluşur."
+        f"- {algorithm_label} sonuçları seçilen k değerine ve StandardScaler sonrası özellik uzayındaki uzaklıklara göre oluşur. K-Medoids'te merkezler veri setindeki gerçek şarkılardır."
     )
