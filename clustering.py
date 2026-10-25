@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from sklearn.cluster import KMeans
+from sklearn.cluster import DBSCAN
+from sklearn.mixture import GaussianMixture
 from sklearn.metrics import (
     adjusted_rand_score,
     calinski_harabasz_score,
@@ -87,7 +89,11 @@ def _fit_kmedoids(
 
 
 def fit_labels(
-    X_scaled: np.ndarray, n_clusters: int, algorithm: str = "kmeans"
+    X_scaled: np.ndarray,
+    n_clusters: int,
+    algorithm: str = "kmeans",
+    eps: float = 0.5,
+    min_samples: int = 5,
 ) -> tuple[np.ndarray, float, float]:
     start = time.perf_counter()
     if algorithm == "kmeans":
@@ -96,12 +102,23 @@ def fit_labels(
         objective = float(model.inertia_)
     elif algorithm == "kmedoids":
         raw_labels, _, objective = _fit_kmedoids(X_scaled, n_clusters)
+    elif algorithm == "dbscan":
+        model = DBSCAN(eps=eps, min_samples=min_samples)
+        raw_labels = model.fit_predict(X_scaled)
+        objective = np.nan
+    elif algorithm == "gmm":
+        model = GaussianMixture(
+            n_components=n_clusters, random_state=42, n_init=5
+        )
+        raw_labels = model.fit_predict(X_scaled)
+        objective = float(-model.score(X_scaled) * len(X_scaled))
     else:
         raise ValueError(f"Unsupported clustering algorithm: {algorithm}")
-    cluster_ids = sorted(int(label) for label in np.unique(raw_labels))
+    cluster_ids = sorted(int(label) for label in np.unique(raw_labels) if label >= 0)
     one_based = {old_id: new_id for new_id, old_id in enumerate(cluster_ids, start=1)}
     labels = np.array(
-        [one_based[int(label)] for label in raw_labels], dtype=int
+        [0 if int(label) == -1 else one_based[int(label)] for label in raw_labels],
+        dtype=int,
     )
     return labels, float(time.perf_counter() - start), objective
 
@@ -114,10 +131,14 @@ def evaluate_k_range(
     k_values: range,
     reference_labels: np.ndarray | None = None,
     algorithm: str = "kmeans",
+    eps: float = 0.5,
+    min_samples: int = 5,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for k in k_values:
-        labels, elapsed, objective = fit_labels(X_scaled, k, algorithm)
+        labels, elapsed, objective = fit_labels(
+            X_scaled, k, algorithm, eps=eps, min_samples=min_samples
+        )
         metrics = calculate_metrics(X_scaled, labels)
         external = calculate_external_metrics(labels, reference_labels)
         rows.append(
@@ -143,20 +164,30 @@ evaluate_k_range = st.cache_data(show_spinner=False)(evaluate_k_range)
 
 def calculate_metrics(X_scaled: np.ndarray, labels: np.ndarray) -> dict[str, Any]:
     labels = np.asarray(labels)
-    distinct = np.unique(labels)
+    valid = labels != 0
+    scored_X = np.asarray(X_scaled)[valid]
+    scored_labels = labels[valid]
+    distinct = np.unique(scored_labels)
     result: dict[str, Any] = {
         "cluster_count": len(distinct),
         "silhouette": np.nan,
         "davies_bouldin": np.nan,
         "calinski_harabasz": np.nan,
     }
-    if len(X_scaled) >= 3 and 2 <= len(distinct) < len(X_scaled):
+    if len(scored_X) >= 3 and 2 <= len(distinct) < len(scored_X):
         try:
             result["silhouette"] = float(silhouette_score(
-                X_scaled, labels, sample_size=min(1000, len(X_scaled)), random_state=42
+                scored_X,
+                scored_labels,
+                sample_size=min(1000, len(scored_X)),
+                random_state=42,
             ))
-            result["davies_bouldin"] = float(davies_bouldin_score(X_scaled, labels))
-            result["calinski_harabasz"] = float(calinski_harabasz_score(X_scaled, labels))
+            result["davies_bouldin"] = float(
+                davies_bouldin_score(scored_X, scored_labels)
+            )
+            result["calinski_harabasz"] = float(
+                calinski_harabasz_score(scored_X, scored_labels)
+            )
         except (ValueError, FloatingPointError):
             pass
     return result
@@ -180,7 +211,7 @@ def calculate_external_metrics(
     reference = np.asarray(reference_labels)
     if len(predicted) != len(reference):
         raise ValueError("Küme etiketleri ile dış doğrulama etiketlerinin uzunlukları eşleşmiyor.")
-    valid = pd.notna(reference)
+    valid = pd.notna(reference) & (predicted != 0)
     if valid.sum() < 2 or len(np.unique(reference[valid])) < 2:
         return result
 
@@ -204,6 +235,9 @@ def make_cluster_names(
     means = z_df.groupby("_cluster").mean(numeric_only=True)
     names: dict[int, str] = {}
     for label in sorted({int(x) for x in labels}):
+        if label == 0:
+            names[label] = "Gürültü — DBSCAN tarafından ayrıştırılan noktalar"
+            continue
         if label in means.index:
             cluster_means = means.loc[label].dropna()
             strongest = cluster_means.abs().sort_values(ascending=False).head(2)
