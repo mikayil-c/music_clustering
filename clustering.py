@@ -162,6 +162,64 @@ def evaluate_k_range(
 evaluate_k_range = st.cache_data(show_spinner=False)(evaluate_k_range)
 
 
+def measure_algorithm(
+    X_scaled: np.ndarray,
+    feature_cols: list[str],
+    n_clusters: int,
+    reference_labels: np.ndarray | None,
+    algorithm: str,
+    n_clusters_max: int,
+    eps: float = 0.5,
+    min_samples: int = 5,
+) -> tuple[
+    np.ndarray,
+    float,
+    dict[str, Any],
+    dict[str, float],
+    dict[int, str],
+    pd.DataFrame,
+]:
+    labels, elapsed, _ = fit_labels(
+        X_scaled,
+        n_clusters,
+        algorithm,
+        eps=eps,
+        min_samples=min_samples,
+    )
+    metrics = calculate_metrics(X_scaled, labels)
+    external_metrics = calculate_external_metrics(labels, reference_labels)
+    cluster_names = make_cluster_names(X_scaled, feature_cols, labels)
+    k_evaluation_df = (
+        evaluate_k_range(
+            X_scaled,
+            range(1, n_clusters_max + 1),
+            reference_labels,
+            algorithm,
+            eps=eps,
+            min_samples=min_samples,
+        )
+        if algorithm != "dbscan"
+        else pd.DataFrame()
+    )
+    return (
+        labels,
+        elapsed,
+        metrics,
+        external_metrics,
+        cluster_names,
+        k_evaluation_df,
+    )
+
+
+measure_algorithm = st.cache_data(show_spinner=False)(measure_algorithm)
+
+
+def clear_measurement_caches() -> None:
+    measure_algorithm.clear()
+    fit_labels.clear()
+    evaluate_k_range.clear()
+
+
 def calculate_metrics(X_scaled: np.ndarray, labels: np.ndarray) -> dict[str, Any]:
     labels = np.asarray(labels)
     valid = labels != 0

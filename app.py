@@ -8,11 +8,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import MaxAbsScaler, MinMaxScaler, StandardScaler
 
 from clustering import (
-    calculate_metrics,
-    calculate_external_metrics,
-    evaluate_k_range,
-    fit_labels,
-    make_cluster_names,
+    clear_measurement_caches,
+    measure_algorithm,
     safe_metric,
 )
 from config import (
@@ -178,35 +175,36 @@ scaler_key = st.sidebar.selectbox(
 scaler_label, scaler_class = scaler_options[scaler_key]
 X_scaled = scaler_class().fit_transform(X_features)
 
+if st.sidebar.button(
+    "Yeniden ölç",
+    help="Seçili algoritmanın cache'lenmiş sonuçlarını siler ve ölçümü tekrar çalıştırır.",
+):
+    clear_measurement_caches()
+
 # Metadata labels are kept outside the model and used only for external validation.
 genre_col = first_existing_column(list(sample.columns), GENRE_CANDIDATES)
 reference_labels = (
     sample[genre_col].astype("string").to_numpy() if genre_col is not None else None
 )
 
-with st.spinner(f"{algorithm_label} modeli eğitiliyor..."):
-    labels, elapsed, _ = fit_labels(
+with st.spinner(f"{algorithm_label} ölçülüyor..."):
+    (
+        labels,
+        elapsed,
+        metrics,
+        external_metrics,
+        cluster_names,
+        k_evaluation_df,
+    ) = measure_algorithm(
         X_scaled,
+        model_features,
         int(n_clusters),
-        algorithm,
-        eps=eps,
-        min_samples=min_samples,
-    )
-metrics = calculate_metrics(X_scaled, labels)
-external_metrics = calculate_external_metrics(labels, reference_labels)
-cluster_names = make_cluster_names(X_scaled, model_features, labels)
-k_evaluation_df = (
-    evaluate_k_range(
-        X_scaled,
-        range(1, n_clusters_max + 1),
         reference_labels,
         algorithm,
+        n_clusters_max,
         eps=eps,
         min_samples=min_samples,
     )
-    if algorithm != "dbscan"
-    else pd.DataFrame()
-)
 
 # Build the enriched result frame.
 result_df = sample.copy()
