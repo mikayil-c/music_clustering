@@ -21,26 +21,26 @@ def validate_dataset(path: Path) -> int:
     warnings: list[str] = []
 
     if frame.empty:
-        errors.append("Veri seti boş.")
+        errors.append("The dataset is empty.")
     if len(numeric_features) < 2:
-        errors.append("En az iki beklenen sayısal müzikal özellik bulunmalı.")
+        errors.append("At least two expected numerical musical features are required.")
 
     duplicate_rows = int(frame.duplicated().sum())
     if duplicate_rows:
-        warnings.append(f"{duplicate_rows} tamamen tekrarlayan satır bulundu.")
+        warnings.append(f"Found {duplicate_rows} completely duplicated rows.")
 
     missing_values = int(frame[numeric_features].isna().sum().sum())
     if missing_values:
-        errors.append(f"Müzikal özelliklerde toplam {missing_values} eksik değer bulundu.")
+        errors.append(f"Found {missing_values} missing values across musical features.")
 
     for feature in numeric_features:
         values = pd.to_numeric(frame[feature], errors="coerce")
         invalid = int(values.isna().sum())
         non_finite = int((~np.isfinite(values.dropna())).sum())
         if invalid:
-            errors.append(f"{feature}: {invalid} sayısal olmayan değer bulundu.")
+            errors.append(f"{feature}: found {invalid} non-numeric values.")
         if non_finite:
-            errors.append(f"{feature}: {non_finite} sonsuz değer bulundu.")
+            errors.append(f"{feature}: found {non_finite} infinite values.")
         if feature in {
             "danceability",
             "energy",
@@ -52,28 +52,28 @@ def validate_dataset(path: Path) -> int:
         }:
             out_of_range = int(((values < 0) | (values > 1)).sum())
             if out_of_range:
-                errors.append(f"{feature}: [0, 1] aralığı dışında {out_of_range} değer bulundu.")
+                errors.append(f"{feature}: found {out_of_range} values outside the [0, 1] range.")
         elif feature == "tempo" and (values <= 0).any():
-            errors.append("tempo: sıfır veya negatif değer bulundu.")
+            errors.append("tempo: found zero or negative values.")
 
-    print(f"Dosya: {path}")
-    print(f"Satır: {len(frame):,} | Sütun: {len(frame.columns):,}")
-    print(f"Kontrol edilen müzikal özellik: {', '.join(numeric_features)}")
-    print(f"Tamamen tekrarlayan satır: {duplicate_rows}")
+    print(f"File: {path}")
+    print(f"Rows: {len(frame):,} | Columns: {len(frame.columns):,}")
+    print(f"Checked musical features: {', '.join(numeric_features)}")
+    print(f"Completely duplicated rows: {duplicate_rows}")
     if warnings:
-        print("Uyarılar:")
+        print("Warnings:")
         for warning in warnings:
             print(f"- {warning}")
     if errors:
-        print("Hatalar:")
+        print("Errors:")
         for error in errors:
             print(f"- {error}")
         return 1
-    print("Sonuç: veri seti kümeleme için temel kontrollerden geçti.")
+    print("Result: the dataset passed the basic clustering checks.")
     return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Müzik CSV dosyası için değişmezlik kontrolü.")
-    parser.add_argument("path", type=Path, help="Kontrol edilecek CSV dosyası")
+    parser = argparse.ArgumentParser(description="Validation checks for a music CSV dataset.")
+    parser.add_argument("path", type=Path, help="Dataset to validate")
     raise SystemExit(validate_dataset(parser.parse_args().path))

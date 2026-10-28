@@ -143,12 +143,12 @@ def evaluate_k_range(
         external = calculate_external_metrics(labels, reference_labels)
         rows.append(
             {
-                "K değeri": k,
+                "K value": k,
                 "Objective": objective,
                 "Silhouette Score": metrics["silhouette"],
                 "Davies–Bouldin Index": metrics["davies_bouldin"],
                 "Calinski–Harabasz Score": metrics["calinski_harabasz"],
-                "Süre (sn)": elapsed,
+                "Duration (sec)": elapsed,
                 "Adjusted Rand Index": external["adjusted_rand"],
                 "Normalized Mutual Information": external["normalized_mutual_info"],
                 "Homogeneity": external["homogeneity"],
@@ -268,7 +268,7 @@ def calculate_external_metrics(
     predicted = np.asarray(labels)
     reference = np.asarray(reference_labels)
     if len(predicted) != len(reference):
-        raise ValueError("Küme etiketleri ile dış doğrulama etiketlerinin uzunlukları eşleşmiyor.")
+        raise ValueError("Cluster labels and external validation labels must have the same length.")
     valid = pd.notna(reference) & (predicted != 0)
     if valid.sum() < 2 or len(np.unique(reference[valid])) < 2:
         return result
@@ -294,21 +294,21 @@ def make_cluster_names(
     names: dict[int, str] = {}
     for label in sorted({int(x) for x in labels}):
         if label == 0:
-            names[label] = "Gürültü — DBSCAN tarafından ayrıştırılan noktalar"
+            names[label] = "Noise — points separated by DBSCAN"
             continue
         if label in means.index:
             cluster_means = means.loc[label].dropna()
             strongest = cluster_means.abs().sort_values(ascending=False).head(2)
             descriptors = [
-                f"{feature} {'görece yüksek' if cluster_means[feature] > 0 else 'görece düşük'}"
+                f"{feature} {'relatively high' if cluster_means[feature] > 0 else 'relatively low'}"
                 for feature in strongest.index
             ]
         else:
             descriptors = []
         suffix = " · ".join(descriptors[:2])
         names[label] = (
-            f"Küme {label}"
-            + (f" — {suffix}" if suffix else " — belirgin tek profil yok")
+            f"Cluster {label}"
+            + (f" — {suffix}" if suffix else " — no single dominant profile")
         )
     return names
 

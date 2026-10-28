@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 FEATURE_LABELS = {
+    "danceability": "Danceability",
+    "energy": "Energy",
+    "tempo": "Tempo (BPM)",
+    "acousticness": "Acousticness",
+    "instrumentalness": "Instrumentalness",
+    "valence": "Valence",
+    "loudness": "Loudness (dB)",
+    "speechiness": "Speechiness",
+    "liveness": "Liveness",
+}
+FEATURE_LABELS_TR = {
     "danceability": "Dans edilebilirlik",
     "energy": "Enerji",
     "tempo": "Tempo (BPM)",
