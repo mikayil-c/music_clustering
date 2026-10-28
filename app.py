@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MaxAbsScaler, MinMaxScaler, StandardScaler
 
 from clustering import (
     calculate_metrics,
@@ -34,8 +34,19 @@ st.set_page_config(
 )
 
 st.title("🎵 Music Cluster Lab")
+algorithm_options = {
+    "kmeans": "K-Means",
+    "kmedoids": "K-Medoids",
+    "dbscan": "DBSCAN",
+    "gmm": "Gaussian Mixture Model (GMM)",
+}
+scaler_options = {
+    "standard": ("StandardScaler", StandardScaler),
+    "minmax": ("MinMaxScaler", MinMaxScaler),
+    "maxabs": ("MaxAbsScaler", MaxAbsScaler),
+}
 st.markdown(
-    "Şarkıları sayısal müzikal özelliklerine göre K-Means ile kümeleyen ve "
+    "Şarkıları sayısal müzikal özelliklerine göre farklı kümeleme algoritmalarıyla kümeleyen ve "
     "benzer parçaları keşfetmeye yardımcı olan denetimsiz öğrenme uygulaması."
 )
 
@@ -119,19 +130,53 @@ st.info(
 )
 
 st.sidebar.header("2. Ölçeklendirme ve kümeleme")
+algorithm = st.sidebar.selectbox(
+    "Kümeleme algoritması",
+    options=list(algorithm_options),
+    format_func=algorithm_options.get,
+    help="DBSCAN yoğunluk tabanlı kümeler bulur ve gürültüyü ayırabilir. GMM, her kümeyi Gauss dağılımıyla modeller.",
+)
+algorithm_label = algorithm_options[algorithm]
 
 n_clusters_max = min(10, sample_size)
-n_clusters = st.sidebar.slider(
-    "K-Means küme sayısı (k)",
-    min_value=1,
-    max_value=max(1, n_clusters_max),
-    value=min(4, max(1, n_clusters_max)),
-    help="K değeri 1 olabilir; ancak tek kümede Silhouette, Davies–Bouldin ve Calinski–Harabasz metrikleri hesaplanamaz.",
-)
+if algorithm == "dbscan":
+    eps = st.sidebar.slider(
+        "DBSCAN eps",
+        min_value=0.05,
+        max_value=5.0,
+        value=0.5,
+        step=0.05,
+        help="Komşuluk yarıçapı. Daha yüksek değerler daha büyük ve daha az sayıda küme oluşturabilir.",
+    )
+    min_samples = st.sidebar.slider(
+        "DBSCAN minimum örnek sayısı",
+        min_value=2,
+        max_value=min(20, sample_size),
+        value=min(5, sample_size),
+        help="Bir noktanın çekirdek örnek sayılması için gereken komşu sayısı.",
+    )
+    n_clusters = min(2, sample_size)
+else:
+    eps = 0.5
+    min_samples = 5
+    n_clusters = st.sidebar.slider(
+        f"{algorithm_label} küme sayısı (k)",
+        min_value=1,
+        max_value=max(1, n_clusters_max),
+        value=min(4, max(1, n_clusters_max)),
+        help="K değeri 1 olabilir; ancak tek kümede Silhouette, Davies–Bouldin ve Calinski–Harabasz metrikleri hesaplanamaz.",
+    )
 
 model_features = selected_features
 X_features = sample[model_features].to_numpy(dtype=float)
-X_scaled = StandardScaler().fit_transform(X_features)
+scaler_key = st.sidebar.selectbox(
+    "Ölçeklendirme yöntemi",
+    options=list(scaler_options),
+    format_func=lambda key: scaler_options[key][0],
+    help="Ölçeklendirme, farklı ölçü birimlerine sahip özelliklerin model üzerindeki etkisini dengeler.",
+)
+scaler_label, scaler_class = scaler_options[scaler_key]
+X_scaled = scaler_class().fit_transform(X_features)
 
 # Metadata labels are kept outside the model and used only for external validation.
 genre_col = first_existing_column(list(sample.columns), GENRE_CANDIDATES)
@@ -139,13 +184,28 @@ reference_labels = (
     sample[genre_col].astype("string").to_numpy() if genre_col is not None else None
 )
 
-with st.spinner("K-Means modeli eğitiliyor..."):
-    labels, elapsed, _ = fit_labels(X_scaled, int(n_clusters))
+with st.spinner(f"{algorithm_label} modeli eğitiliyor..."):
+    labels, elapsed, _ = fit_labels(
+        X_scaled,
+        int(n_clusters),
+        algorithm,
+        eps=eps,
+        min_samples=min_samples,
+    )
 metrics = calculate_metrics(X_scaled, labels)
 external_metrics = calculate_external_metrics(labels, reference_labels)
 cluster_names = make_cluster_names(X_scaled, model_features, labels)
-k_evaluation_df = evaluate_k_range(
-    X_scaled, range(1, n_clusters_max + 1), reference_labels
+k_evaluation_df = (
+    evaluate_k_range(
+        X_scaled,
+        range(1, n_clusters_max + 1),
+        reference_labels,
+        algorithm,
+        eps=eps,
+        min_samples=min_samples,
+    )
+    if algorithm != "dbscan"
+    else pd.DataFrame()
 )
 
 # Build the enriched result frame.
@@ -174,6 +234,8 @@ metric_cols[3].metric("Silhouette Score", safe_metric(metrics["silhouette"]))
 metric_cols[4].metric("Davies–Bouldin", safe_metric(metrics["davies_bouldin"]))
 metric_cols[5].metric("Calinski–Harabasz", safe_metric(metrics["calinski_harabasz"]))
 metric_cols[6].metric("Model süresi", f"{elapsed:.3f} sn")
+if algorithm == "dbscan" and 0 in labels:
+    st.caption(f"DBSCAN gürültü olarak {int(np.sum(labels == 0)):,} şarkı işaretledi.")
 
 st.caption(
     "Not: Küme numaraları tür etiketleri değildir. Otomatik profil ifadeleri, "
@@ -192,7 +254,7 @@ tab_overview, tab_dataset, tab_map, tab_profiles, tab_discovery = st.tabs(
 )
 
 with tab_overview:
-    st.subheader("K-Means sonuç özeti")
+    st.subheader(f"{algorithm_label} sonuç özeti")
     left, right = st.columns([1.2, 1])
     with left:
         st.markdown("**Kümelerin büyüklükleri**")
@@ -217,7 +279,7 @@ with tab_overview:
     with right:
         st.markdown("**Bu sonuç nasıl okunmalı?**")
         st.write(
-            "K-Means, her şarkıyı seçilen k değeri doğrultusunda bir kümeye atar. "
+            f"{algorithm_label}, her şarkıyı seçilen k değeri doğrultusunda bir kümeye atar. "
             "Küme profillerini ve gerçek şarkı örneklerini metriklerle birlikte değerlendir."
         )
         st.markdown("**Seçilen modelin metrikleri**")
@@ -300,13 +362,16 @@ with tab_dataset:
         st.plotly_chart(genre_fig, use_container_width=True)
         st.dataframe(genre_counts, use_container_width=True, hide_index=True)
 
-    st.markdown("**K değerlerine göre K-Means değerlendirmesi**")
-    st.write(
-        "Aşağıdaki grafikler, StandardScaler uygulanmış müzikal özelliklerle "
-        "k=1 ile k arasındaki K-Means sonuçlarını karşılaştırır."
-    )
+    if algorithm == "dbscan":
+        st.info("DBSCAN için k değerleri karşılaştırması yapılmaz; sonuçlar eps ve minimum örnek sayısına bağlıdır.")
+    else:
+        st.markdown(f"**K değerlerine göre {algorithm_label} değerlendirmesi**")
+        st.write(
+            f"Aşağıdaki grafikler, {scaler_label} uygulanmış müzikal özelliklerle "
+            f"k=1 ile k arasındaki {algorithm_label} sonuçlarını karşılaştırır."
+        )
     chart_data = [
-        ("WCSS (Inertia)", "Elbow yöntemi — WCSS", "WCSS / Inertia"),
+        ("Objective", "Kümeleme amacı", "Toplam uzaklık"),
         ("Silhouette Score", "Silhouette Score", "Silhouette Score"),
         ("Davies–Bouldin Index", "Davies–Bouldin Index", "Davies–Bouldin Index"),
         ("Calinski–Harabasz Score", "Calinski–Harabasz Score", "Calinski–Harabasz Score"),
@@ -323,38 +388,39 @@ with tab_dataset:
                 ("V-measure", "V-measure", "V-measure"),
             ]
         )
-    for metric_name, title, y_label in chart_data:
-        metric_df = k_evaluation_df.dropna(subset=[metric_name])
-        st.plotly_chart(
-            px.line(
-                metric_df,
-                x="K değeri",
-                y=metric_name,
-                markers=True,
-                title=title,
-                labels={metric_name: y_label},
+    if algorithm != "dbscan":
+        for metric_name, title, y_label in chart_data:
+            metric_df = k_evaluation_df.dropna(subset=[metric_name])
+            st.plotly_chart(
+                px.line(
+                    metric_df,
+                    x="K değeri",
+                    y=metric_name,
+                    markers=True,
+                    title=title,
+                    labels={metric_name: y_label},
+                ),
+                use_container_width=True,
+            )
+        st.dataframe(
+            k_evaluation_df.style.format(
+                {
+                    "Objective": "{:.1f}",
+                    "Silhouette Score": "{:.3f}",
+                    "Davies–Bouldin Index": "{:.3f}",
+                    "Calinski–Harabasz Score": "{:.1f}",
+                    "Süre (sn)": "{:.3f}",
+                    "Adjusted Rand Index": "{:.3f}",
+                    "Normalized Mutual Information": "{:.3f}",
+                    "Homogeneity": "{:.3f}",
+                    "Completeness": "{:.3f}",
+                    "V-measure": "{:.3f}",
+                },
+                na_rep="—",
             ),
             use_container_width=True,
+            hide_index=True,
         )
-    st.dataframe(
-        k_evaluation_df.style.format(
-            {
-                "WCSS (Inertia)": "{:.1f}",
-                "Silhouette Score": "{:.3f}",
-                "Davies–Bouldin Index": "{:.3f}",
-                "Calinski–Harabasz Score": "{:.1f}",
-                "Süre (sn)": "{:.3f}",
-                "Adjusted Rand Index": "{:.3f}",
-                "Normalized Mutual Information": "{:.3f}",
-                "Homogeneity": "{:.3f}",
-                "Completeness": "{:.3f}",
-                "V-measure": "{:.3f}",
-            },
-            na_rep="—",
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
 
 with tab_map:
     st.subheader("PCA ile iki boyutlu küme haritası")
@@ -366,7 +432,7 @@ with tab_map:
         color="cluster_name",
         hover_data=hover_cols,
         opacity=0.78,
-        title="K-Means sonuçları — PCA izdüşümü",
+        title=f"{algorithm_label} sonuçları — PCA izdüşümü",
         labels={"PCA 1": "PCA bileşeni 1", "PCA 2": "PCA bileşeni 2"},
     )
     fig.update_traces(marker={"size": 7})
@@ -493,11 +559,14 @@ with tab_discovery:
 export_df = result_df.drop(columns=["_display_name"], errors="ignore").copy()
 st.divider()
 st.subheader("Sonuçları dışa aktar")
-st.write("K-Means küme etiketlerini, küme profilini ve PCA koordinatlarını CSV olarak indirebilirsin.")
+st.write(
+    f"{algorithm_label} küme etiketlerini, küme profilini ve PCA koordinatlarını "
+    "CSV olarak indirebilirsin."
+)
 st.download_button(
     "Kümelenmiş şarkıları CSV indir",
     data=export_df.to_csv(index=False).encode("utf-8-sig"),
-    file_name="clustered_songs_kmeans.csv",
+    file_name=f"clustered_songs_{algorithm}.csv",
     mime="text/csv",
 )
 
@@ -509,5 +578,5 @@ with st.expander("Metodolojik notlar"):
         "- İçsel metrikler müzikal kaliteyi kesin olarak ölçmez. Kümeler, profil tabloları ve şarkı örnekleriyle birlikte yorumlanmalıdır.\n"
         "- Tür sütunu varsa ARI, NMI, homogeneity, completeness ve V-measure, tür etiketlerini modele vermeden dış doğrulama olarak hesaplanır.\n"
         "- Küme profil adları, sabit eşikler yerine her kümenin veri genelinden standardize edilmiş en ayırt edici iki özelliğine göre oluşturulur.\n"
-        "- K-Means sonuçları seçilen k değerine ve StandardScaler sonrası özellik uzayındaki uzaklıklara göre oluşur."
+        f"- {algorithm_label} sonuçları {scaler_label} sonrası özellik uzayında oluşur. K-Medoids'te merkezler veri setindeki gerçek şarkılardır; DBSCAN gürültü noktalarını ayrı işaretler."
     )
